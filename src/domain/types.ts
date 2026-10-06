@@ -85,6 +85,7 @@ export type AnalysisRequest = {
   kind: ExperimentKind;
   samples: RawSample[];
   calibrations: CalibrationProfile[];
+  primaryChannelId?: string;
   referenceChannelId?: string;
   analysis?: {
     maxFrequencyHz?: number;
