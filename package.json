@@ -1,11 +1,16 @@
 {
-  "name": "cryogenic-quantum-noise-inversion-service",
+  "name": "noise-audit-replay",
   "version": "1.0.0",
-  "private": true,
+  "description": "Auditable, replayable noise analysis: immutable evidence records for preview and async analysis, faithful pinned replay and classified diff reports.",
   "type": "module",
-  "description": "低温量子器件实验数据校准与噪声谱反演后端服务",
+  "main": "src/index.js",
   "scripts": {
-    "start": "node --experimental-strip-types src/http/server.ts",
-    "test": "node --experimental-strip-types --test test/*.test.ts"
-  }
+    "test": "node --test test/",
+    "demo": "node examples/demo.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "UNLICENSED",
+  "private": true
 }
