@@ -1,5 +1,6 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { invariant } from '../domain/errors.ts';
+import { legacyInputDigest } from '../domain/audit/canonical.ts';
 import { applyCalibration } from '../domain/calibration/apply.ts';
 import { synchronizeSamples } from '../domain/clock/synchronize.ts';
 import { fitExponential } from '../domain/fit/decay.ts';
@@ -7,10 +8,6 @@ import { summarizeNoise } from '../domain/noise/classify.ts';
 import { buildSeries, splitWindows } from '../domain/signal/window.ts';
 import { crossSpectrum, periodogram } from '../domain/signal/spectrum.ts';
 import type { AnalysisRequest, AnalysisResult, NoiseSummary, SynchronizedSample } from '../domain/types.ts';
-
-function digest(input: AnalysisRequest): string {
-  return createHash('sha256').update(JSON.stringify(input)).digest('hex');
-}
 
 function mean(values: number[]): number { return values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0; }
 function stddev(values: number[], average: number): number { return values.length ? Math.sqrt(mean(values.map((value) => (value - average) ** 2))) : 0; }
@@ -64,7 +61,7 @@ export function analyzeExperiment(request: AnalysisRequest): AnalysisResult {
   const rawPhaseDrift = phases.at(-1)! - phases[0];
   const phaseDriftRad = Math.atan2(Math.sin(rawPhaseDrift), Math.cos(rawPhaseDrift));
   return {
-    analysisId: randomUUID(), experimentId: request.experimentId, kind: request.kind, inputDigest: digest(request), calibrationVersions,
+    analysisId: randomUUID(), experimentId: request.experimentId, kind: request.kind, inputDigest: legacyInputDigest(request), calibrationVersions,
     metrics: { sampleCount: calibrated.length, channelCount: new Set(calibrated.map((sample) => sample.channelId)).size, durationNs: sync.samples.at(-1)!.timestampNs - sync.samples[0].timestampNs, triggerCount: sync.triggerCount, droppedSamples: sync.droppedSamples, medianSkewNs: sync.medianSkewNs, amplitudeMean: mean(amplitudes), amplitudeStdDev: stddev(amplitudes, mean(amplitudes)), phaseDriftRad, decay },
     primarySpectrum, crossSpectrum: cross, noise, scanResults, warnings: request.referenceChannelId && reference.length !== primary.length ? ['Reference channel could not be paired for every primary sample'] : [],
   };

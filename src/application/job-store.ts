@@ -1,17 +1,36 @@
 import { randomUUID } from 'node:crypto';
 import { DomainError } from '../domain/errors.ts';
 import { analyzeExperiment } from './analysis-service.ts';
+import type { AuditStore } from './audit-store.ts';
 import type { AnalysisRequest, AnalysisResult } from '../domain/types.ts';
 
 type JobState = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
-type Job = { id: string; state: JobState; request: AnalysisRequest; result?: AnalysisResult; error?: { code: string; message: string }; createdAt: string; startedAt?: string; finishedAt?: string };
+type Job = { id: string; state: JobState; request: AnalysisRequest; result?: AnalysisResult; error?: { code: string; message: string }; createdAt: string; startedAt?: string; finishedAt?: string; auditRecordId?: string };
 
 const jobs = new Map<string, Job>();
 const idempotency = new Map<string, string>();
 const queue: string[] = [];
 let draining = false;
+let auditStore: AuditStore | null = null;
 
-function snapshot(job: Job): Omit<Job, 'request'> { const { request, ...safe } = job; return safe; }
+/**
+ * Attach the durable evidence store used to seal async analysis outcomes.
+ * When unset, jobs still run (legacy in-memory behavior); nothing is sealed.
+ */
+export function setAuditStore(store: AuditStore | null): void {
+  auditStore = store;
+}
+
+/**
+ * Historical response shape is preserved exactly: auditRecordId is stripped
+ * from the body and exposed to the HTTP layer via findAuditRecordId instead.
+ */
+function snapshot(job: Job): Omit<Job, 'request' | 'auditRecordId'> { const { request, auditRecordId: _auditRecordId, ...safe } = job; return safe; }
+
+/** Evidence record id backing a job, when one has been sealed. */
+export function findAuditRecordId(jobId: string): string | undefined {
+  return jobs.get(jobId)?.auditRecordId;
+}
 
 async function drain(): Promise<void> {
   if (draining) return;
@@ -23,8 +42,31 @@ async function drain(): Promise<void> {
       if (!job || job.state === 'cancelled') continue;
       job.state = 'running'; job.startedAt = new Date().toISOString();
       await new Promise<void>((resolve) => setImmediate(resolve));
-      try { job.result = analyzeExperiment(job.request); job.state = 'completed'; }
-      catch (error) { const domain = error instanceof DomainError ? error : new DomainError('ANALYSIS_FAILED', error instanceof Error ? error.message : 'Unknown analysis failure'); job.error = { code: domain.code, message: domain.message }; job.state = 'failed'; }
+      try {
+        const result = analyzeExperiment(job.request);
+        job.result = result;
+        job.state = 'completed';
+        if (auditStore) {
+          // Seal immutable evidence BEFORE exposing the completed state, so a
+          // completed job is always backed by a replayable record.
+          const record = await auditStore.sealSuccess('async', job.request, result, job.id);
+          job.auditRecordId = record.recordId;
+        }
+      } catch (error) {
+        const domain = error instanceof DomainError ? error : new DomainError('ANALYSIS_FAILED', error instanceof Error ? error.message : 'Unknown analysis failure');
+        job.error = { code: domain.code, message: domain.message };
+        job.state = 'failed';
+        if (auditStore) {
+          try {
+            const record = await auditStore.sealFailure('async', job.request, { code: domain.code, message: domain.message }, job.id);
+            job.auditRecordId = record.recordId;
+          } catch (sealError) {
+            // Evidence failure is surfaced, never swallowed: a failed job
+            // without evidence cannot claim auditability.
+            job.error = { code: 'AUDIT_PERSIST_FAILED', message: sealError instanceof Error ? sealError.message : 'Could not seal failure evidence' };
+          }
+        }
+      }
       job.finishedAt = new Date().toISOString();
     }
   } finally { draining = false; }

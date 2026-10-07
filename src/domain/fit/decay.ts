@@ -1,4 +1,3 @@
-import { invariant } from '../errors.ts';
 import type { DecayFit, SynchronizedSample } from '../types.ts';
 
 function regression(points: Array<{ x: number; y: number }>): { slope: number; intercept: number; rSquared: number } {
